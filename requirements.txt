@@ -1,0 +1,10 @@
+# Pinned to what I actually ran on Python 3.14.6 (macOS) and 3.12 (in Docker).
+streamlit==1.64.0
+altair==6.3.0
+langgraph==1.2.12
+pydantic==2.13.5
+pandas==3.0.6
+numpy==2.5.3
+
+# Only used when BUDGET_DB_URL is set. Everything works without a database.
+psycopg[binary]==3.3.6
