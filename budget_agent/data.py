@@ -9,6 +9,7 @@ shuffle the numbers of every other line.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 from functools import lru_cache
 
 import numpy as np
@@ -30,8 +31,11 @@ LEDGER_COLUMNS = [
 
 
 def _line_rng(seed: int, key: str) -> np.random.Generator:
-    digest = abs(hash((seed, key))) % (2**32)
-    return np.random.default_rng([seed, digest])
+    # Python's str hash is salted per process, so derive the stream from a
+    # stable digest instead. Two runs of this file must produce byte-identical
+    # ledgers or none of the numbers in the README mean anything.
+    digest = hashlib.blake2b(key.encode("utf-8"), digest_size=4).digest()
+    return np.random.default_rng([seed, int.from_bytes(digest, "big")])
 
 
 def _step_multiplier(spec: vocab.VendorSpec, month: dt.date) -> float:

@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import pandas as pd
 import pytest
 
@@ -32,6 +35,23 @@ def test_allocations_sum_to_one():
 def test_same_seed_same_numbers():
     a, b = generate_ledger(DEFAULT_SEED), generate_ledger(DEFAULT_SEED)
     pd.testing.assert_frame_equal(a, b)
+
+
+def test_seed_is_stable_across_processes():
+    """PYTHONHASHSEED must not leak into the generator."""
+    code = (
+        "import sys; sys.path.insert(0, '.');"
+        "from budget_agent.data import generate_ledger;"
+        "print(round(generate_ledger().amount_usd.sum(), 2))"
+    )
+    totals = {
+        subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True,
+            env={"PYTHONHASHSEED": str(seed), "PATH": "/usr/bin:/bin"},
+        ).stdout.strip()
+        for seed in (0, 1, 7)
+    }
+    assert len(totals) == 1, totals
 
 
 def test_different_seed_different_numbers():
