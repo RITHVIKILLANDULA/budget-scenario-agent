@@ -16,7 +16,7 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 from . import fiscal, vocab
-from .data import DEFAULT_SEED, generate_ledger
+from .data import DEFAULT_SEED, load_ledger
 from .models import Lever, LeverKind, Scenario
 
 LINE_KEYS = ["department", "category", "vendor"]
@@ -56,6 +56,7 @@ class Baseline:
     growth: np.ndarray  # fitted annual growth per line
     seasonality: pd.DataFrame  # category x calendar month
     config: EngineConfig
+    source: str = "in-process"
 
     @property
     def total(self) -> float:
@@ -123,7 +124,7 @@ def _seasonality_table(ledger: pd.DataFrame) -> pd.DataFrame:
 
 def build_baseline(config: EngineConfig | None = None) -> Baseline:
     config = config or EngineConfig()
-    ledger = generate_ledger(config.seed)
+    ledger, source = load_ledger(config.seed)
     plan_months = fiscal.PLAN_MONTHS
 
     wide = (
@@ -164,6 +165,7 @@ def build_baseline(config: EngineConfig | None = None) -> Baseline:
         growth=growth,
         seasonality=season,
         config=config,
+        source=source,
     )
 
 

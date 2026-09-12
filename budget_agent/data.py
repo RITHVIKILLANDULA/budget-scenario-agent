@@ -87,6 +87,21 @@ def generate_ledger(seed: int = DEFAULT_SEED) -> pd.DataFrame:
     )
 
 
+def load_ledger(seed: int = DEFAULT_SEED) -> tuple[pd.DataFrame, str]:
+    """The ledger the engine should use, and where it came from.
+
+    Postgres if BUDGET_DB_URL points at a seeded database, otherwise the same
+    numbers generated in this process. The database holds the generated data,
+    so the two paths agree line for line.
+    """
+    from . import store
+
+    frame = store.fetch_ledger()
+    if frame is not None:
+        return frame, "postgres"
+    return generate_ledger(seed), "in-process"
+
+
 def vendor_terms() -> pd.DataFrame:
     """Contract terms that constrain what a cut can actually achieve."""
     return pd.DataFrame(
