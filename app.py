@@ -24,6 +24,12 @@ EXAMPLES = [
     "cut the Atlantis team by 10%",
 ]
 
+def md(text: str) -> str:
+    """Streamlit reads a bare $ as the start of LaTeX, which mangles every
+    dollar figure on the page."""
+    return text.replace("$", "\\$")
+
+
 SOURCE_BADGE = {
     "derived": ":blue[derived from the ledger]",
     "default": ":gray[model default]",
@@ -159,10 +165,10 @@ def render_assumptions(result) -> None:
     )
     for assumption in result.assumptions:
         st.markdown(
-            f"**{assumption.label}** — {assumption.value}  \n"
-            f"{SOURCE_BADGE.get(assumption.source, assumption.source)}"
+            md(f"**{assumption.label}** — {assumption.value}  \n")
+            + SOURCE_BADGE.get(assumption.source, assumption.source)
         )
-        st.caption(assumption.detail)
+        st.caption(md(assumption.detail))
 
 
 def render_result(state, config: EngineConfig) -> None:
@@ -182,9 +188,9 @@ def render_result(state, config: EngineConfig) -> None:
         help="Before backfill, reinvestment and one-time fees.",
     )
 
-    st.write(state["narrative"])
+    st.markdown(md(state["narrative"]))
     for warning in result.warnings:
-        st.warning(warning)
+        st.warning(md(warning))
 
     left, right = st.columns([3, 2], gap="large")
     with left:
@@ -224,7 +230,7 @@ def render_result(state, config: EngineConfig) -> None:
 def render_rejection(state) -> None:
     st.error("That question was rejected before any numbers were calculated.")
     for error in state.get("errors", []):
-        st.markdown(f"- {error}")
+        st.markdown(md(f"- {error}"))
     with st.expander("What the parser did see", expanded=True):
         st.code("\n".join(state.get("trace", [])) or "nothing matched", language="text")
     st.caption(
@@ -242,7 +248,7 @@ def main() -> None:
     st.title("Budget Scenario Agent")
     st.caption(
         f"Ask a budget question in English. It is parsed into a validated "
-        f"scenario, run against a ${baseline.total/1e6:,.1f}M FY{fiscal.PLAN_FY} "
+        f"scenario, run against a {baseline.total/1e6:,.1f}M USD FY{fiscal.PLAN_FY} "
         f"plan built from {len(baseline.lines)} ledger lines, and every "
         f"assumption is listed back to you."
     )
@@ -286,7 +292,7 @@ def main() -> None:
         if any(s.get("status") != "done" for s in states):
             for label, s in zip("AB", states):
                 if s.get("status") != "done":
-                    st.error(f"Scenario {label} was rejected: {'; '.join(s['errors'])}")
+                    st.error(md(f"Scenario {label} was rejected: {'; '.join(s['errors'])}"))
         else:
             results = [s["result"] for s in states]
             table = compare(results)
@@ -321,12 +327,12 @@ def main() -> None:
             st.altair_chart(chart, width="stretch")
             best, other = sorted(results, key=lambda r: -r.net_savings)
             st.info(
-                f"**{best.scenario.name}** saves "
+                md(f"**{best.scenario.name}** saves "
                 f"${best.net_savings - other.net_savings:,.0f} more than "
                 f"**{other.scenario.name}**, but gives back "
                 f"${best.effects['contractor_backfill_usd'] + best.effects['shift_reinvestment_usd'] + best.effects['one_time_exit_fees_usd']:,.0f} "
                 f"against ${other.effects['contractor_backfill_usd'] + other.effects['shift_reinvestment_usd'] + other.effects['one_time_exit_fees_usd']:,.0f} "
-                f"in second-order cost."
+                f"in second-order cost.")
             )
 
     runs = store.recent_runs()
