@@ -9,7 +9,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from budget_agent import fiscal, store, vocab
+from budget_agent import fiscal, llm, store, vocab
 from budget_agent.engine import EngineConfig, compare
 from budget_agent.graph import AGENT, ask, get_baseline
 
@@ -83,6 +83,11 @@ def sidebar_config() -> EngineConfig:
         )
     else:
         st.sidebar.info(f"In-process ledger ({db['detail']})")
+    language = llm.status()
+    if language["enabled"]:
+        st.sidebar.caption(
+            f"Language layer: {language['model']} first, rules as the fallback."
+        )
     st.sidebar.caption(
         f"Synthetic ledger, seed {defaults.seed}. "
         f"{fiscal.label(fiscal.HISTORY_START)}..{fiscal.label(fiscal.HISTORY_END)} "
@@ -171,6 +176,16 @@ def render_assumptions(result) -> None:
         st.caption(md(assumption.detail))
 
 
+PARSER_NOTE = {
+    "model": "read by the model, then validated against the schema",
+    "rules": "read by the rules parser",
+}
+
+
+def parser_caption(state) -> str:
+    return f":gray[Question {PARSER_NOTE.get(state.get('parser'), 'read')}.]"
+
+
 def render_result(state, config: EngineConfig) -> None:
     result = state["result"]
     summary = state["result_summary"]
@@ -189,6 +204,7 @@ def render_result(state, config: EngineConfig) -> None:
     )
 
     st.markdown(md(state["narrative"]))
+    st.caption(parser_caption(state))
     for warning in result.warnings:
         st.warning(md(warning))
 
@@ -233,9 +249,10 @@ def render_rejection(state) -> None:
         st.markdown(md(f"- {error}"))
     with st.expander("What the parser did see", expanded=True):
         st.code("\n".join(state.get("trace", [])) or "nothing matched", language="text")
+    st.caption(parser_caption(state))
     st.caption(
-        "The language layer is rule-based, so this is usually a vocabulary miss "
-        "rather than a misunderstanding. Known categories: "
+        "This is usually a vocabulary miss rather than a misunderstanding. "
+        "Known categories: "
         + ", ".join(vocab.category_label(c) for c in vocab.CATEGORY_KEYS)
         + ". Known departments: " + ", ".join(vocab.DEPARTMENT_KEYS) + "."
     )

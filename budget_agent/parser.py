@@ -313,6 +313,11 @@ def _scenario_name(draft: dict) -> str:
     return f"{scope} {magnitude} {when}{extra}"[:80]
 
 
+# The name is derived from the draft, not written by whatever produced it, so
+# the model-backed parser in llm.py labels a scenario exactly as the rules do.
+scenario_name = _scenario_name
+
+
 def parse_question(question: str) -> ParseResult:
     text = question.lower().strip()
     if not text:

@@ -10,6 +10,13 @@ visible as the happy one.
        |          |
        +----------+--> reject
 
+`parse` has two implementations behind it. With no API key it is the rules
+parser and nothing else, which is the default and the only path the tests take.
+With a key set it asks a model first (see `llm.py`); if the model's proposal
+does not survive the schema the rules parser runs instead and the question is
+answered exactly as it would have been. Either way `validate` is unchanged and
+no number in the answer comes from a model.
+
 State is a plain dict and every node appends to `trace`, so the UI can show
 what the agent did without any extra instrumentation.
 """
@@ -23,7 +30,7 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
-from . import fiscal
+from . import fiscal, llm
 from .engine import Baseline, EngineConfig, ScenarioResult, build_baseline, simulate
 from .models import Scenario
 from .parser import parse_question
@@ -38,6 +45,7 @@ class AgentState(TypedDict, total=False):
     scenario: dict | None
     parse_coverage: float
     ignored_words: list[str]
+    parser: str
     status: str
     baseline_summary: dict
     result_summary: dict
@@ -60,8 +68,24 @@ def get_baseline(config: EngineConfig) -> Baseline:
 
 
 def parse_node(state: AgentState) -> dict:
+    """Model first if there is a key, rules otherwise, rules again if the
+    model's proposal does not hold up. The fallback is silent by design: a
+    question the model fumbles is answered by the parser that has always
+    answered it, not by an error message about a feature the user did not
+    ask for."""
+    proposed = llm.parse_question(state["question"])
+    if proposed is not None and proposed.draft is not None:
+        return {
+            "draft": proposed.draft,
+            "errors": [],
+            "trace": [f"[parse] {line}" for line in proposed.trace],
+            "status": "parsed",
+            "parser": "model",
+        }
+
     parsed = parse_question(state["question"])
-    trace = [f"[parse] {line}" for line in parsed.trace]
+    trace = [f"[parse] {line}" for line in (proposed.trace if proposed else [])]
+    trace += [f"[parse] {line}" for line in parsed.trace]
     trace.append(
         f"[parse] matched {parsed.tokens_matched}/{parsed.tokens_total} "
         f"significant tokens"
@@ -73,6 +97,7 @@ def parse_node(state: AgentState) -> dict:
         "ignored_words": parsed.ignored_words,
         "trace": trace,
         "status": "parsed" if parsed.ok else "rejected",
+        "parser": "rules",
     }
 
 
