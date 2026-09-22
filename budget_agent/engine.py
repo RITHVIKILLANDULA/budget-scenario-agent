@@ -348,7 +348,7 @@ def simulate(scenario: Scenario, baseline: Baseline, config: EngineConfig | None
                         continue
                     amount = reductions[local] * config.shift_efficiency
                     destination = _shift_destination_line(
-                        lines, departments[row], lever.to_category
+                        lines, baseline.run_rate, departments[row], lever.to_category
                     )
                     additions.add(destination[0], lever.to_category, destination[1], col, float(amount))
                     effects["shift_reinvestment_usd"] += float(amount)
@@ -439,12 +439,22 @@ def simulate(scenario: Scenario, baseline: Baseline, config: EngineConfig | None
     return result
 
 
-def _shift_destination_line(lines: pd.DataFrame, department: str, category: str) -> tuple[str, str]:
+def _shift_destination_line(
+    lines: pd.DataFrame, size: np.ndarray, department: str, category: str
+) -> tuple[str, str]:
     """Where reinvested spend lands: the biggest existing line in that
-    department and category, or a new unallocated line if there is none."""
-    candidates = lines[(lines["department"] == department) & (lines["category"] == category)]
-    if len(candidates):
-        return department, str(candidates.iloc[0]["vendor"])
+    department and category, or a new unallocated line if there is none.
+
+    Biggest by trailing run rate. Taking the first row instead would pick
+    whatever sorts first alphabetically, which for Engineering cloud means
+    Beacon CDN rather than Northwind Cloud -- an order of magnitude smaller.
+    """
+    rows = np.flatnonzero(
+        (lines["department"].to_numpy() == department)
+        & (lines["category"].to_numpy() == category)
+    )
+    if rows.size:
+        return department, str(lines["vendor"].to_numpy()[rows[size[rows].argmax()]])
     return department, "(unallocated)"
 
 
@@ -593,8 +603,9 @@ def build_assumptions(
             "Plan composition",
             "no new vendors or departments",
             "structural",
-            "The plan year contains the same 57 ledger lines as the trailing year. "
-            "New spend the business has already committed to is not in here.",
+            f"The plan year contains the same {len(baseline.lines)} ledger lines as "
+            "the trailing year. New spend the business has already committed to is "
+            "not in here.",
         )
     )
     out.append(

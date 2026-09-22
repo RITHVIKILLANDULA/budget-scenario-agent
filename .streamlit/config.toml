@@ -1,0 +1,10 @@
+# Checked in so that `streamlit run app.py` works on a clean machine.
+# Without showEmailPrompt, the first run stops at Streamlit's "enter your
+# email" prompt and never binds the port. gatherUsageStats is off because
+# the README promises this thing makes no network calls.
+
+[server]
+showEmailPrompt = false
+
+[browser]
+gatherUsageStats = false

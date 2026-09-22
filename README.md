@@ -155,16 +155,21 @@ cuts land in full. That asymmetry is what makes comparing two scenarios interest
 
 ## Numbers
 
-Measured on an M-series Mac, Python 3.14.6, with `scripts/bench.py`:
+Measured on an M-series Mac, Python 3.14.6, with `scripts/bench.py` — except the last
+row, which is `pytest -q`:
 
 | | |
 | --- | --- |
 | Generate the ledger (1,368 rows) | 7 ms |
 | Build the FY27 baseline (57 lines × 12 months) | 30 ms |
 | Question to answer, median over 240 runs | 8.0 ms |
-| Same, p95 | 18.5 ms |
+| Same, p95 | 10 ms |
 | Cold process, import to first answer | 0.47 s |
 | Test suite | 128 tests in 1.3 s |
+
+The median is stable to a few tenths of a millisecond across runs. The p95 is not:
+on a loaded machine I have seen it near 18 ms, so treat the tail as a property of
+whatever else is running rather than of this code.
 
 Nothing is cached between questions except the baseline, which is keyed on the engine config and
 rebuilt whenever you move a slider. The app is fast because there is no network call anywhere in
