@@ -1,10 +1,17 @@
 """Timings for the numbers quoted in the README.
 
     .venv/bin/python scripts/bench.py
+    .venv/bin/python scripts/bench.py --model   # also times the model parser
+
+The main figures are the rules path, which is the one that runs with no key
+and the one the README quotes, so the model is switched off here even if a
+key is sitting in the environment. Leaving it on would put an HTTP call in
+the middle of a microbenchmark.
 """
 
 from __future__ import annotations
 
+import os
 import pathlib
 import statistics
 import subprocess
@@ -12,6 +19,9 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+WITH_MODEL = "--model" in sys.argv
+os.environ["BUDGET_LLM"] = "off"
 
 QUESTIONS = [
     "what happens if we cut contractor spend 15% in Q3",
@@ -35,6 +45,40 @@ def cold_start() -> float:
         cwd=pathlib.Path(__file__).resolve().parents[1],
     )
     return float(out.stdout.strip())
+
+
+def model_path() -> None:
+    """Six live calls, spaced out. The endpoint this talks to allows 8,000
+    tokens a minute and one question costs about 1,100, so a tighter loop
+    measures the rate limiter rather than the model."""
+    from budget_agent import llm
+
+    os.environ.pop("BUDGET_LLM", None)  # on for this section only
+    if not llm.status()["enabled"]:
+        print("model path        off (no GROQ_API_KEY)")
+        return
+    asked = [
+        "cut travel by fifteen percent",
+        "cut contractors 10% in Q1 but only 5% in Q2",
+        "trim the dev team's cloud bill by a tenth",
+        "hold marketing flat and take an eighth out of consultants",
+        "drop the Harborview lease by a fifth in the back half",
+        "pull a tenth out of every software licence next year",
+    ]
+    timings, accepted = [], 0
+    for i, question in enumerate(asked):
+        if i:
+            time.sleep(10)
+        started = time.perf_counter()
+        parsed = llm.parse_question(question)
+        timings.append(time.perf_counter() - started)
+        accepted += parsed.draft is not None
+    timings.sort()
+    print(
+        f"model parse       median {timings[len(timings) // 2]:.2f} s, "
+        f"min {timings[0]:.2f} s, max {timings[-1]:.2f} s, "
+        f"{accepted}/{len(asked)} accepted by the schema"
+    )
 
 
 def main() -> None:
@@ -73,6 +117,8 @@ def main() -> None:
         f"max {1000 * timings[-1]:.1f} ms  (n={len(timings)})"
     )
     print(f"cold process      {cold_start():.2f} s (import to first answer)")
+    if WITH_MODEL:
+        model_path()
 
 
 if __name__ == "__main__":

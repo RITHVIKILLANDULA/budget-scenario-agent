@@ -25,6 +25,16 @@ python3 -m venv .venv
 That opens on <http://localhost:8501> with the ledger generated in-process. Nothing is fetched and
 nothing is written to disk.
 
+To put a model in front of the parser, give it a key:
+
+```bash
+cp .env.example .env        # then paste a key into it
+# or just: export GROQ_API_KEY=...
+```
+
+That is the only difference the key makes, and the section below is the argument for it. With no
+key the app is the app above: same UI, same answers, no warning that anything is missing.
+
 To run it against real Postgres instead:
 
 ```bash
@@ -37,7 +47,8 @@ the same generated rows.
 
 ## What you can ask
 
-The parser is rules, not a model (more on that below). It handles four kinds of lever:
+The parser is rules by default and a model when you give it a key (more on both below). Either
+way it produces one of four kinds of lever:
 
 | Question | Becomes |
 | --- | --- |
@@ -61,29 +72,83 @@ own export of the compiled graph, not a drawing of it:
 
 <img src="docs/img/agent_graph.png" alt="The compiled LangGraph topology" width="260">
 
-`parse` turns text into a draft dict, `validate` turns the draft into a Pydantic `Scenario` or a
-list of reasons, `baseline` projects the plan year, `simulate` applies the levers, `explain` writes
+`parse` turns text into a draft dict — with the model if there is a key and with the regexes
+otherwise, which is a choice inside the node rather than another node — `validate` turns the draft
+into a Pydantic `Scenario` or a list of reasons, `baseline` projects the plan year, `simulate` applies the levers, `explain` writes
 the narrative. Both `parse` and `validate` can route to `reject`, and that edge is the reason this
 is a graph rather than a function — the failure path has to be as visible as the happy one. Every
 node appends to `trace`, which the UI shows verbatim.
 
 ![Data flow](docs/img/architecture.png)
 
-### The language layer is rules, deliberately
+### The language layer is rules first
 
-`budget_agent/parser.py` is regexes plus the alias lists in `vocab.py`. No LLM call, which is why
-this repo has no API key and why the parser has 35 tests that assert exact output.
+`budget_agent/parser.py` is regexes plus the alias lists in `vocab.py`. No model call, no key, 35
+tests that assert exact output. That is what runs on a clean clone, what runs on the public deploy,
+and what produces every number in this README.
 
-That is a real trade-off and I would not pretend otherwise. An LLM would handle *"can we find a
-million dollars without touching headcount"*; the rules parser cannot, and tells you so. What the
-rules buy is that the language layer is inspectable: when it gets something wrong you can see
-which pattern fired, and the fix is a line of code rather than a prompt change you cannot test.
-It also reports which words it ignored, so *"cut contractor spend 15% in Q3 please by friday"*
-runs but flags `friday` as unused.
+What the rules buy is that the language layer is inspectable: when it gets something wrong you can
+see which pattern fired, and the fix is a line of code rather than a prompt change you cannot test.
+It also reports which words it ignored, so *"cut contractor spend 15% in Q3 please by friday"* runs
+but flags `friday` as unused.
 
-If I swapped it, the LLM would slot in as a replacement for `parse_node` only: emit the same draft
-dict, keep `validate` exactly as it is. The schema is the safety net either way, and I would rather
-have the schema than the model.
+### A model in front of them
+
+Set `GROQ_API_KEY` and the question goes to a model before it goes to the regexes. The model does
+the job the previous version of this section said a model would do, and nothing more: emit the same
+draft dict the rules parser emits, using only the vocabulary that is actually in the ledger.
+
+It is sent the real department, category and vendor names out of `vocab.py`, the fiscal calendar,
+and the months the data covers, and it must reply with one JSON object. Then three things happen
+before anything reaches the screen:
+
+1. `budget_agent/llm.py` checks every name in the reply against `vocab.py`. A department that does
+   not exist kills the reply; it is not fuzzy-matched to the nearest one.
+2. The draft goes through `Scenario.model_validate` — the same call, the same validators, the same
+   rejection rules the rules parser's output goes through.
+3. If either step fails, or the call errors, times out or gets rate-limited, the question goes to
+   the rules parser and is answered exactly as it would have been. The reason is written to the
+   trace and nowhere else, because a fallback that worked is not an error the reader needs.
+
+No number on the screen comes from the model. It is never asked for one. It returns a request, the
+request has to survive the schema, and Python costs it. That is the same arrangement as before —
+the model just replaced the regexes at the front of it.
+
+#### Where it earns its place
+
+I ran both parsers over the same questions to find these. They are not written to flatter the
+feature, and the numbers are from `budget_agent.graph.ask` with the default assumptions.
+
+| Question | Rules parser | With the model |
+| --- | --- | --- |
+| *cut travel by fifteen percent* | rejected: "has no size" | −15% Travel over FY27, saves $202,924 |
+| *cut contractors 10% in Q1 but only 5% in Q2* | one lever, −10% in Q1, $16,764 | two levers, $40,140 |
+| *trim the dev team's cloud bill by a tenth* | −10% Cloud in all six departments, $487,334 | −10% Cloud in Engineering, $385,337 |
+| *cut everything except engineering by 5%* | −5% on Engineering alone, $352,486 | −5% on the other five departments, $498,050 |
+
+The first one is the harmless kind of failure: it says no. The other three are the reason I
+bothered, because none of them is rejected — the rules parser answers a slightly different
+question and hands back a number that looks perfectly reasonable. "dev team" is not an alias in
+`vocab.py` and "but only 5% in Q2" is not a clause the splitter knows, so both drop out quietly,
+and the only trace of it is the ignored-words line. On the cloud question that silent drop is
+$102,000 in a $21.5M plan.
+
+The last row is the one that bothers me. "except" is not a word the rules parser has any concept
+of, so it matches the one department it can see and cuts precisely the department the question
+asked it to leave alone. That is not a near miss, it is the inverse, and nothing in the output
+says so.
+
+It is not uniformly better, and its failure mode is worse than a rejection. *"halve what we spend
+on consultants after the new year"* comes back with the window `["2027-01-01", "2027-06-01"]` —
+the two ends of the range I meant rather than the six months inside it. That is a legal window
+over two real months of the plan year, so `Scenario.model_validate` passes it, and the answer is
+$149,917 where the reading I intended is $677,285. The gate catches malformed replies and invented
+vocabulary. It cannot catch this, because a two-month cut is an ordinary thing to ask for and the
+schema has no way to know it is not what I meant. I have not found a fix, and it reproduces.
+
+It also declines a lot, which I would rather it did. *"can we find a million dollars without
+touching headcount"* comes back as an empty lever list, falls through to the rules parser, and gets
+the rejection it always got. There is still no optimiser behind any of this.
 
 ### The schema is the gate
 
@@ -165,15 +230,23 @@ row, which is `pytest -q`:
 | Question to answer, median over 240 runs | 8.0 ms |
 | Same, p95 | 10 ms |
 | Cold process, import to first answer | 0.47 s |
-| Test suite | 128 tests in 1.3 s |
+| Test suite | 168 tests in 1.4 s |
 
 The median is stable to a few tenths of a millisecond across runs. The p95 is not:
 on a loaded machine I have seen it near 18 ms, so treat the tail as a property of
 whatever else is running rather than of this code.
 
+With a key set the parse stops being free. `scripts/bench.py --model` times six live questions:
+median 0.47 s on one run and 1.59 s on the next, fastest 0.38 s, slowest 1.88 s, six of six
+accepted by the schema. That spread between runs is the endpoint's and not this code's, which is
+the main thing a network call costs you. Everything after the parse is the same 8 ms of
+arithmetic.
+
 Nothing is cached between questions except the baseline, which is keyed on the engine config and
-rebuilt whenever you move a slider. The app is fast because there is no network call anywhere in
-the path.
+rebuilt whenever you move a slider — and the model's reply, which is cached per question because
+Streamlit re-runs the whole script on every widget change and the compare panel asks two more
+questions on each of those. Without a key the app is fast because there is no network call
+anywhere in the path. With one, the parse is the only network call there is.
 
 ## Postgres
 
@@ -198,10 +271,16 @@ BUDGET_DB_URL=postgresql://budget:budget@localhost:55432/budget \
 .venv/bin/python -m pytest -q
 ```
 
-128 tests, no database needed. They assert behaviour, not coverage: that a floor blocks the right
+168 tests, no database needed. They assert behaviour, not coverage: that a floor blocks the right
 number of dollars, that a six-month notice period makes a Q1 cut a no-op and a Q3 cut land, that
 two 10% cuts compound to 19%, that a shift at 100% efficiency is cost-neutral, that the compiled
 graph has exactly the six nodes this README claims.
+
+Forty of them are the model path. They hand `llm.parse_question` a stub that returns whatever a
+model might have said — good JSON, fenced JSON, prose, an invented department, a 400% cut, a
+timeout — and assert what comes out the other side. The suite makes no network calls and takes no
+key; `tests/conftest.py` switches the model off for every test so that a key sitting in your shell
+cannot quietly put an HTTP request in front of all 168 of them.
 
 Six more tests in `tests/test_store.py` run only when `BUDGET_DB_URL` is set. They check that the
 Postgres round trip preserves the ledger to the cent and that both paths produce the same baseline:
@@ -217,7 +296,9 @@ BUDGET_DB_URL=postgresql://budget:budget@localhost:55432/budget \
 - **The data is invented.** Vendor names, amounts, contract terms, all of it. The point is the
   mechanism, not the numbers.
 - **The parser is narrow.** It understands the four lever shapes above and the vocabulary in
-  `vocab.py`. Anything else is rejected rather than guessed at.
+  `vocab.py`. Anything else is rejected rather than guessed at. A key widens the phrasing that
+  gets through, not the vocabulary and not the lever shapes: a name the ledger does not hold is
+  thrown out in `llm.py` before Pydantic is even asked.
 - **Seasonality is thin.** Two years of history means two observations per calendar month. The
   index is honest about being an estimate, but I would not plan a real Q4 on it.
 - **No headcount model.** These are vendor and category lines only. "Cut contractor spend" moves
@@ -236,6 +317,7 @@ budget_agent/
   fiscal.py             July-June fiscal calendar
   data.py               seeded ledger generator
   parser.py             English -> draft scenario, rules only
+  llm.py                English -> draft scenario, model, optional
   models.py             Pydantic scenario schema and the rejection rules
   engine.py             baseline, levers, constraints, assumption ledger
   graph.py              the LangGraph graph
@@ -245,7 +327,8 @@ scripts/
   bench.py              the timings in this README
   make_figures.py       the figures in this README
   screenshot.py         the app screenshots in this README
-tests/                  134 tests (128 + 6 that need a database)
+tests/                  174 tests (168 + 6 that need a database)
+.env.example            the optional key, and the switch to ignore it
 ```
 
 MIT licensed. See `LICENSE`.
